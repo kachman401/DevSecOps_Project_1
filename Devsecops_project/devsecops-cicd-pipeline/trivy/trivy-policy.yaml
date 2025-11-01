@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Policy
+rules:
+  - action: allow
+    resource: vulnerability
+    severity: HIGH
+    description: Allow vulnerabilities with high severity
+  - action: deny
+    resource: vulnerability
+    severity: CRITICAL
+    description: Deny vulnerabilities with critical severity
+  - action: allow
+    resource: secret
+    description: Allow secrets to be scanned
+  - action: deny
+    resource: secret
+    description: Deny secrets in images
+  - action: allow
+    resource: config
+    description: Allow configuration files to be scanned
+  - action: deny
+    resource: config
+    description: Deny misconfigurations in images

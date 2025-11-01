@@ -1,0 +1,18 @@
+# Ignore the following files and directories when building the Docker image
+.git
+node_modules
+*.log
+*.tmp
+*.md
+Dockerfile
+docker-compose.yml
+scripts/
+tests/
+sonar/
+trivy/
+jenkins/
+k8s/
+README.md
+LICENSE
+Makefile
+.github/
