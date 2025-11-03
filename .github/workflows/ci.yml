@@ -7,23 +7,82 @@ on:
       - ci/setup
   pull_request:
 
+env:
+  REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Node.js setup is not needed since this project isn't a Node app
-      # - name: Set up Node.js
-      #   uses: actions/setup-node@v4
-      #   with:
-      #     node-version: 18
+      - name: Run tests (if present)
+        run: |
+          if [ -f ./scripts/test.sh ]; then
+            chmod +x ./scripts/test.sh
+            ./scripts/test.sh
+          else
+            echo "No tests script found (./scripts/test.sh) — skipping tests"
+          fi
 
-      # Commented out npm commands since there's no package.json file
-      # - name: Install dependencies
-      #   run: npm install
+      - name: SonarQube analysis (requires sonar-project.properties)
+        run: |
+          # Uses SonarScanner CLI docker image; requires sonar-project.properties in repo
+          docker run --rm \
+            -e SONAR_TOKEN="${{ secrets.SONAR_TOKEN }}" \
+            -v "${{ github.workspace }}":/usr/src \
+            sonarsource/sonar-scanner-cli \
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-      # - name: Run tests
-      #   run: npm test
+      - name: Build Docker image
+        id: build-image
+        run: |
+          SHORT_SHA=${GITHUB_SHA::7}
+          IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${SHORT_SHA}
+          docker build -t "${IMAGE}" .
+          echo "image=${IMAGE}" >> $GITHUB_OUTPUT
+
+      - name: Login to container registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ secrets.DOCKER_REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Push image
+        run: |
+          IMAGE=${{ steps.build-image.outputs.image }}
+          docker push "${IMAGE}"
+          LATEST=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          docker tag "${IMAGE}" "${LATEST}"
+          docker push "${LATEST}"
+
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@v0.9.4
+        with:
+          image-ref: ${{ steps.build-image.outputs.image }}
+          format: 'table'
+        env:
+          TRIVY_SEVERITY: "CRITICAL,HIGH"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Deploy to Kubernetes (staging)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          if [ -z "${{ secrets.KUBE_CONFIG_B64 }}" ]; then
+            echo "KUBE_CONFIG_B64 not set — skipping deploy"
+            exit 0
+          fi
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBE_CONFIG_B64 }}" | base64 --decode > $HOME/.kube/config
+          # ensure namespace exists
+          kubectl apply -f k8s/namespace.yaml || true
+          # Replace 'app-deployment' and 'app-container' with your deployment/container names
+          kubectl -n ${{ secrets.K8S_NAMESPACE }} set image deployment/app-deployment app-container=${{ steps.build-image.outputs.image }} --record || \
+            (echo "Update image failed — check deployment name/container name" && exit 1)
+        env:
+          KUBECONFIG: $HOME/.kube/config
