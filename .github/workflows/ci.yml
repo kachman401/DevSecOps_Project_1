@@ -16,10 +16,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Step 1: Checkout source code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Optional tests
+      # Step 2: Run tests (if present)
       - name: Run tests (if present)
         run: |
           if [ -f ./scripts/test.sh ]; then
@@ -29,18 +30,17 @@ jobs:
             echo "No test script found — skipping tests"
           fi
 
-      # SonarQube Scan (requires sonar-project.properties in repo)
+      # Step 3: SonarQube static code analysis
       - name: SonarQube analysis
         run: |
           docker run --rm \
             -e SONAR_TOKEN="${{ secrets.SONAR_TOKEN }}" \
             -v "${{ github.workspace }}":/usr/src \
-            sonarsource/sonar-scanner-cli \
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+            sonarsource/sonar-scanner-cli
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-      # Build Docker Image
+      # Step 4: Build Docker image
       - name: Build Docker image
         id: build-image
         run: |
@@ -49,7 +49,7 @@ jobs:
           docker build -t "${IMAGE}" .
           echo "image=${IMAGE}" >> $GITHUB_OUTPUT
 
-      # Docker Login
+      # Step 5: Login to Docker registry
       - name: Login to container registry
         uses: docker/login-action@v3
         with:
@@ -57,7 +57,7 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # Push Docker Image
+      # Step 6: Push image to registry
       - name: Push image to registry
         run: |
           IMAGE=${{ steps.build-image.outputs.image }}
@@ -66,20 +66,20 @@ jobs:
           docker tag "${IMAGE}" "${LATEST}"
           docker push "${LATEST}"
 
-      # Trivy Vulnerability Scan
+      # Step 7: Trivy vulnerability scan
       - name: Trivy image scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@v0.9.4
         with:
           image-ref: ${{ steps.build-image.outputs.image }}
           format: 'table'
-          exit-code: '0'
+          exit-code: '1'
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Kubernetes Deployment (only on main branch)
+      # Step 8: Deploy to Kubernetes (staging)
       - name: Deploy to Kubernetes (staging)
         if: github.ref == 'refs/heads/main'
         run: |
@@ -87,10 +87,16 @@ jobs:
             echo "KUBE_CONFIG_B64 not set — skipping deploy"
             exit 0
           fi
+
           mkdir -p $HOME/.kube
           echo "${{ secrets.KUBE_CONFIG_B64 }}" | base64 --decode > $HOME/.kube/config
+
+          # Apply namespace and deployment manifests
           kubectl apply -f k8s/namespace.yaml || true
-          kubectl -n ${{ secrets.K8S_NAMESPACE }} set image deployment/app-deployment app-container=${{ steps.build-image.outputs.image }} --record || \
-            (echo "Update image failed — check deployment/container names" && exit 1)
+          kubectl apply -f k8s/deployment.yaml
+
+          # Update image in the deployment
+          kubectl -n ${{ secrets.K8S_NAMESPACE }} set image \
+            deployment/my-app my-app-container=${{ steps.build-image.outputs.image }} --record
         env:
           KUBECONFIG: $HOME/.kube/config
