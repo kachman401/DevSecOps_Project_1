@@ -1,3 +1,4 @@
+# ...existing code...
 name: CI Pipeline
 
 on:
@@ -10,11 +11,13 @@ on:
 env:
   REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
   IMAGE_NAME: ${{ github.repository }}
+  # Update these if your k8s deployment/container names differ
+  DEPLOYMENT_NAME: devsecops-app
+  CONTAINER_NAME: devsecops-app
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       # Step 1: Checkout source code
       - name: Checkout code
@@ -23,6 +26,7 @@ jobs:
       # Step 2: Run tests (if present)
       - name: Run tests (if present)
         run: |
+          set -e
           if [ -f ./scripts/test.sh ]; then
             chmod +x ./scripts/test.sh
             ./scripts/test.sh
@@ -33,6 +37,8 @@ jobs:
       # Step 3: SonarQube static code analysis
       - name: SonarQube analysis
         run: |
+          set -e
+          # Run SonarScanner CLI in docker (uses SONAR_TOKEN secret)
           docker run --rm \
             -e SONAR_TOKEN="${{ secrets.SONAR_TOKEN }}" \
             -v "${{ github.workspace }}":/usr/src \
@@ -44,6 +50,7 @@ jobs:
       - name: Build Docker image
         id: build-image
         run: |
+          set -e
           SHORT_SHA=${GITHUB_SHA::7}
           IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${SHORT_SHA}
           docker build -t "${IMAGE}" .
@@ -60,29 +67,31 @@ jobs:
       # Step 6: Push image to registry
       - name: Push image to registry
         run: |
+          set -e
           IMAGE=${{ steps.build-image.outputs.image }}
           docker push "${IMAGE}"
           LATEST=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           docker tag "${IMAGE}" "${LATEST}"
           docker push "${LATEST}"
 
-      # Step 7: Trivy vulnerability scan (updated version)
+      # Step 7: Trivy vulnerability scan
       - name: Trivy image scan
         uses: aquasecurity/trivy-action@v0.28.0
         with:
           image-ref: ${{ steps.build-image.outputs.image }}
           format: 'table'
-          exit-code: '1'
+          exit-code: '1'            # fail workflow on HIGH/CRITICAL
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Step 8: Deploy to Kubernetes (staging)
+      # Step 8: Deploy to Kubernetes (staging) — only runs on main
       - name: Deploy to Kubernetes (staging)
         if: github.ref == 'refs/heads/main'
         run: |
+          set -e
           if [ -z "${{ secrets.KUBE_CONFIG_B64 }}" ]; then
             echo "KUBE_CONFIG_B64 not set — skipping deploy"
             exit 0
@@ -91,12 +100,13 @@ jobs:
           mkdir -p $HOME/.kube
           echo "${{ secrets.KUBE_CONFIG_B64 }}" | base64 --decode > $HOME/.kube/config
 
-          # Apply namespace and deployment manifests
+          # Apply namespace and deployment manifests (ensure k8s/*.yaml exist)
           kubectl apply -f k8s/namespace.yaml || true
           kubectl apply -f k8s/deployment.yaml
 
-          # Update image in the deployment
+          # Update image in the deployment (uses env values above)
           kubectl -n ${{ secrets.K8S_NAMESPACE }} set image \
-            deployment/my-app my-app-container=${{ steps.build-image.outputs.image }} --record
+            deployment/${{ env.DEPLOYMENT_NAME }} ${{ env.CONTAINER_NAME }}=${{ steps.build-image.outputs.image }} --record
         env:
           KUBECONFIG: $HOME/.kube/config
+# ...existing code...
