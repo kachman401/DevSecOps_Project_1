@@ -74,19 +74,31 @@ jobs:
           docker tag "${IMAGE}" "${LATEST}"
           docker push "${LATEST}"
 
-      # Step 7: Trivy vulnerability scan
-      - name: Trivy image scan
-        uses: aquasecurity/trivy-action@v0.28.0
-        with:
-          image-ref: ${{ steps.build-image.outputs.image }}
-          format: 'table'
-          exit-code: '1'            # fail workflow on HIGH/CRITICAL
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+      # ...existing code...
+      # Step 7: Trivy vulnerability scan (use CLI instead of action)
+-     - name: Trivy image scan
+-        uses: aquasecurity/trivy-action@v0.28.0
+-        with:
+-          image-ref: ${{ steps.build-image.outputs.image }}
+-          format: 'table'
+-          exit-code: '1'            # fail workflow on HIGH/CRITICAL
+-          ignore-unfixed: true
+-          vuln-type: 'os,library'
+-          severity: 'CRITICAL,HIGH'
+-        env:
+-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
++      - name: Install Trivy
++        run: |
++          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
++          trivy --version
++
++      - name: Trivy image scan
++        run: |
++          set -e
++          IMAGE=${{ steps.build-image.outputs.image }}
++          # scan and fail on HIGH/CRITICAL findings
++          trivy image --ignore-unfixed --exit-code 1 --severity CRITICAL,HIGH --format table "${IMAGE}"
+# ...existing code...
       # Step 8: Deploy to Kubernetes (staging) — only runs on main
       - name: Deploy to Kubernetes (staging)
         if: github.ref == 'refs/heads/main'
