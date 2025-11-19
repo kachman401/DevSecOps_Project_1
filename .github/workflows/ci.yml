@@ -83,7 +83,7 @@ jobs:
       # Step 7: Trivy vulnerability scan (updated version)
       # --------------------------------------------------
       - name: Trivy image scan
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@0.24.0
         with:
           image-ref: ${{ steps.build-image.outputs.image }}
           format: 'table'
