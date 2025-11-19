@@ -9,7 +9,7 @@ on:
 
 env:
   REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ${{ github.event.repository.name }}
 
 jobs:
   build:
@@ -53,7 +53,12 @@ jobs:
         id: build-image
         run: |
           SHORT_SHA=${GITHUB_SHA::7}
-          IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${SHORT_SHA}
+
+          IMAGE_NAME_LOWER=$(echo "${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+
+          IMAGE="${{ env.REGISTRY }}/${IMAGE_NAME_LOWER}:${SHORT_SHA}"
+          echo "Using image name: ${IMAGE}"
+
           docker build -t "${IMAGE}" .
           echo "image=${IMAGE}" >> $GITHUB_OUTPUT
 
@@ -68,19 +73,21 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       # --------------------------------------------------
-      # Step 6: Push image to registry
+      # Step 6: Push Docker image
       # --------------------------------------------------
       - name: Push image to registry
         run: |
           IMAGE=${{ steps.build-image.outputs.image }}
           docker push "${IMAGE}"
 
-          LATEST=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          LATEST_NAME_LOWER=$(echo "${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+          LATEST="${{ env.REGISTRY }}/${LATEST_NAME_LOWER}:latest"
+
           docker tag "${IMAGE}" "${LATEST}"
           docker push "${LATEST}"
 
       # --------------------------------------------------
-      # Step 7: Trivy vulnerability scan (updated version)
+      # Step 7: Trivy vulnerability scan
       # --------------------------------------------------
       - name: Trivy image scan
         uses: aquasecurity/trivy-action@0.24.0
@@ -99,6 +106,9 @@ jobs:
       # --------------------------------------------------
       - name: Deploy to Kubernetes (staging)
         if: github.ref == 'refs/heads/main'
+        env:
+          KUBECONFIG: $HOME/.kube/config
+          K8S_NAMESPACE: ${{ secrets.K8S_NAMESPACE }}
         run: |
           if [ -z "${{ secrets.KUBE_CONFIG_B64 }}" ]; then
             echo "KUBE_CONFIG_B64 not set — skipping deploy"
@@ -108,12 +118,8 @@ jobs:
           mkdir -p $HOME/.kube
           echo "${{ secrets.KUBE_CONFIG_B64 }}" | base64 --decode > $HOME/.kube/config
 
-          # Apply namespace and deployment manifests
-          kubectl apply -f k8s/namespace.yaml || true
+           kubectl apply -f k8s/namespace.yaml || true
           kubectl apply -f k8s/deployment.yaml
 
-          # Update image in the deployment
-          kubectl -n ${{ secrets.K8S_NAMESPACE }} set image \
-            deployment/my-app my-app-container=${{ steps.build-image.outputs.image }} --record
-        env:
-          KUBECONFIG: $HOME/.kube/config
+          kubectl -n $K8S_NAMESPACE set image \
+             deployment/my-app my-app-container=${{ steps.build-image.outputs.image }} --record
