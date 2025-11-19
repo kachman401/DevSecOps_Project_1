@@ -47,7 +47,7 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
       # --------------------------------------------------
-      # Step 4: Build Docker image
+      # Step 4: Build Docker image (correct Dockerfile path)
       # --------------------------------------------------
       - name: Build Docker image
         id: build-image
@@ -59,7 +59,9 @@ jobs:
           IMAGE="${{ env.REGISTRY }}/${IMAGE_NAME_LOWER}:${SHORT_SHA}"
           echo "Using image name: ${IMAGE}"
 
-          docker build -t "${IMAGE}" .
+          # Build using Dockerfile inside ./docker/
+          docker build -t "${IMAGE}" -f docker/Dockerfile .
+
           echo "image=${IMAGE}" >> $GITHUB_OUTPUT
 
       # --------------------------------------------------
@@ -118,8 +120,8 @@ jobs:
           mkdir -p $HOME/.kube
           echo "${{ secrets.KUBE_CONFIG_B64 }}" | base64 --decode > $HOME/.kube/config
 
-           kubectl apply -f k8s/namespace.yaml || true
+          kubectl apply -f k8s/namespace.yaml || true
           kubectl apply -f k8s/deployment.yaml
 
           kubectl -n $K8S_NAMESPACE set image \
-             deployment/my-app my-app-container=${{ steps.build-image.outputs.image }} --record
+            deployment/my-app my-app-container=${{ steps.build-image.outputs.image }} --record
